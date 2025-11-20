@@ -1,4 +1,4 @@
-# **C-Keywords**
+# **C-Keywords: C & C++ Memory and Optimization Deep Dive**
 
 ### **Table of Contents**
 1. **[const - The Read-Only Qualifier](#1-const---the-read-only-qualifier)**
@@ -9,6 +9,9 @@
 5. **[extern - Declaration vs Definition](#5-extern---declaration-vs-definition)**
 6. **[Race Conditions & Atomicity](#6-race-conditions--atomicity)**
    - 6.1. [Step-by-Step Race Condition Breakdown](#61-step-by-step-race-condition-breakdown)
+7. **[C++ Specific Keywords & Features](#7-c-specific-keywords--features)**
+   - 7.1. [constexpr - Compile-Time Constants](#71-constexpr---compile-time-constants)
+   - 7.2. [constinit - Forced Constant Initialization](#72-constinit---forced-constant-initialization)
 
 ---
 
@@ -133,7 +136,7 @@ void func2(void) { /* uses R5 for other purpose */ }
 
 **When mandatory:**
 ```c
-volatile uint32_t *status_reg = (uint32_t*)0x40020000;
+volatile uint32_t *status_reg = (uint32_t_t*)0x40020000;
 
 void wait_for_flag(void) {
     while(*status_reg & 0x01) {
@@ -305,6 +308,15 @@ int shared_var;  // WRONG! Creates new definition
 // Linker error: multiple definition of 'shared_var'
 ```
 
+**Function-scope extern (Legal but confusing):**
+```c
+void func(void) {
+    extern int global_x;  // Legal! Declares a global variable
+    global_x = 10;        // Same as file-scope extern
+}
+// Best practice: Always declare at file scope for clarity
+```
+
 ---
 
 ### **6. Race Conditions & Atomicity**
@@ -388,3 +400,107 @@ __enable_irq();           ; CPSIE I (enable interrupts)
 **What atomic means:** **Single, indivisible instruction** that cannot be interrupted. ARM provides:
 - `BSET`/`BCLR` for single bits
 - `LDREX`/`STREX` for memory with lock
+
+---
+
+### **7. C++ Specific Keywords & Features**
+
+---
+
+### **7.1. `constexpr` - Compile-Time Constants**
+
+`constexpr` is C++'s solution to true compile-time computation. Unlike C's `const`, it **forces** evaluation at compile time for variables and functions.
+
+```cpp
+// C++: Compile-time lookup table generation
+constexpr int sine_table[360] = {
+    []() constexpr { 
+        int arr[360] = {};
+        for(int i = 0; i < 360; ++i) 
+            arr[i] = sin(i * M_PI / 180) * 1000;
+        return arr;
+    }()
+};
+
+void func() {
+    constexpr int value = sine_table[45];  // 707 (compiled as literal)
+    // Generates: MOV R0, #707  (no memory access!)
+}
+```
+
+**The Address Rule: `constexpr` Variables May Not Exist in Memory**
+
+This is the **most misunderstood** aspect of `constexpr`:
+
+```cpp
+constexpr int x = 42;  // No storage guaranteed
+
+// If you NEVER take the address:
+int y = x * 2;  // Compiler replaces with int y = 84;
+                // x may not exist in Flash OR RAM!
+
+// If you DO take the address:
+const int *p = &x;  // OOPS! Now x MUST have storage
+```
+
+**What the compiler does when you take the address:**
+
+| Compiler Strategy | Memory Location | Assembly |
+|-------------------|-----------------|----------|
+| **RAM copy** (common) | `.data` at 0x20000000 | `LDR R0, =0x20000000` |
+| **Flash address** (optimized) | `.rodata` at 0x08001000 | `LDR R0, =0x08001000` |
+
+**Real-world disaster:**
+```cpp
+// In header.hpp
+constexpr int CONFIG = 42;  // Supposedly "in Flash"
+
+// In file1.cpp
+int use1() { return CONFIG * 2; }  // Compiler uses literal 84
+
+// In file2.cpp
+const int *p = &CONFIG;  // Forces RAM copy!
+
+// Result: You now have TWO VERSIONS:
+// - Literal 42 in code (file1.cpp)
+// - RAM copy at 0x20000000 with value 42 (file2.cpp)
+// - Changing RAM copy does NOT affect literal usage!
+```
+
+**Key lesson**: `constexpr` is about **compile-time evaluation**, not memory placement. For **guaranteed Flash storage**, use C++20 `constinit`.
+
+---
+
+### **7.2. `constinit` - Forced Constant Initialization**
+
+C++20 introduces `constinit` to force variables into **true** Flash storage, like C's `const` at global scope.
+
+```cpp
+// C++20: Guaranteed in .rodata, addressable
+constinit const int flash_value = 42;  
+
+// Effects:
+// 1. MUST be initialized at compile time (like constexpr)
+// 2. GUARANTEED to live in .rodata section
+// 3. Taking address is safe and consistent
+
+const int *p = &flash_value;  // Always gives Flash address
+```
+
+**constinit vs constexpr vs const:**
+
+| Feature | Compile-Time Eval | Guaranteed Flash Storage | Can Take Address |
+|---------|-------------------|--------------------------|------------------|
+| `const int x` | No | No (depends on context) | Yes |
+| `constexpr int x` | Yes | No (may vanish) | Forces storage |
+| `constinit const int x` | Yes | **Yes** | Yes |
+
+**When to use what:**
+- **C**: Use `const` for globals (goes to Flash automatically)
+- **C++**: Use `constinit const` for Flash-stored constants
+- **C++**: Use `constexpr` for compile-time calculations that may not need storage
+- **Never rely on `constexpr` for memory placement**
+
+---
+
+**Final Note**: C++'s object model is **far more complex** than C's. The same keyword can produce radically different machine code based on context. Always check the disassembly when memory placement matters.
