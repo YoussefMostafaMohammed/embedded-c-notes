@@ -136,7 +136,7 @@ void func2(void) { /* uses R5 for other purpose */ }
 
 **When mandatory:**
 ```c
-volatile uint32_t *status_reg = (uint32_t_t*)0x40020000;
+volatile uint32_t *status_reg = (uint32_t*)0x40020000;  // Fixed typo: was uint32_t_t
 
 void wait_for_flag(void) {
     while(*status_reg & 0x01) {
@@ -428,7 +428,7 @@ void func() {
 }
 ```
 
-**The Address Rule: `constexpr` Variables May Not Exist in Memory**
+**The Address Rule: `constexpr` Variables and Memory Storage**
 
 This is the **most misunderstood** aspect of `constexpr`:
 
@@ -440,34 +440,40 @@ int y = x * 2;  // Compiler replaces with int y = 84;
                 // x may not exist in Flash OR RAM!
 
 // If you DO take the address:
-const int *p = &x;  // OOPS! Now x MUST have storage
+const int *p = &x;  // Now x MUST have storage (but WHERE?)
 ```
 
-**What the compiler does when you take the address:**
+**What the compiler actually does when you take the address:**
+
+A `constexpr` variable that requires storage **always goes in `.rodata` (Flash)**, never `.data` (RAM).
 
 | Compiler Strategy | Memory Location | Assembly |
 |-------------------|-----------------|----------|
-| **RAM copy** (common) | `.data` at 0x20000000 | `LDR R0, =0x20000000` |
-| **Flash address** (optimized) | `.rodata` at 0x08001000 | `LDR R0, =0x08001000` |
+| **Optimized away** (most common) | Nowhere (literal) | `MOV R0, #42` |
+| **Flash storage** (if address taken) | `.rodata` at 0x08001000 | `LDR R0, =0x08001000` |
 
-**Real-world disaster:**
+**Why `.rodata`, not `.data`?**
+- `constexpr` implies `const` - the value CANNOT be modified
+- `.data` is for **mutable** initialized data (read-write RAM)
+- `.rodata` is for **immutable** data (read-only Flash)
+- The linker places `const` and `constexpr` variables in `.rodata` by default
+
+**Real-world issues with `constexpr`:**
 ```cpp
 // In header.hpp
-constexpr int CONFIG = 42;  // Supposedly "in Flash"
+constexpr int CONFIG = 42;  // Header-only constant
 
 // In file1.cpp
 int use1() { return CONFIG * 2; }  // Compiler uses literal 84
 
 // In file2.cpp
-const int *p = &CONFIG;  // Forces RAM copy!
+const int *p = &CONFIG;  // Forces Flash storage at unique address
 
-// Result: You now have TWO VERSIONS:
-// - Literal 42 in code (file1.cpp)
-// - RAM copy at 0x20000000 with value 42 (file2.cpp)
-// - Changing RAM copy does NOT affect literal usage!
+// Result: Code bloat - literal 42 may exist both as immediate value AND Flash address
+// Best practice: Declare constexpr in header, define in ONE .cpp file if address needed
 ```
 
-**Key lesson**: `constexpr` is about **compile-time evaluation**, not memory placement. For **guaranteed Flash storage**, use C++20 `constinit`.
+**Key lesson**: `constexpr` is about **compile-time evaluation**, not memory placement. It never creates RAM copies. For **guaranteed Flash placement**, use C++20 `constinit`.
 
 ---
 
@@ -481,8 +487,8 @@ constinit const int flash_value = 42;
 
 // Effects:
 // 1. MUST be initialized at compile time (like constexpr)
-// 2. GUARANTEED to live in .rodata section
-// 3. Taking address is safe and consistent
+// 2. GUARANTEED to live in .rodata section (Flash)
+// 3. Taking address is safe and consistent across all translation units
 
 const int *p = &flash_value;  // Always gives Flash address
 ```
@@ -491,16 +497,40 @@ const int *p = &flash_value;  // Always gives Flash address
 
 | Feature | Compile-Time Eval | Guaranteed Flash Storage | Can Take Address |
 |---------|-------------------|--------------------------|------------------|
-| `const int x` | No | No (depends on context) | Yes |
-| `constexpr int x` | Yes | No (may vanish) | Forces storage |
+| `const int x` | No | No (depends on context) | Yes (creates storage) |
+| `constexpr int x` | Yes | No (may vanish) | Yes (Flash storage) |
 | `constinit const int x` | Yes | **Yes** | Yes |
 
 **When to use what:**
-- **C**: Use `const` for globals (goes to Flash automatically)
-- **C++**: Use `constinit const` for Flash-stored constants
-- **C++**: Use `constexpr` for compile-time calculations that may not need storage
-- **Never rely on `constexpr` for memory placement**
+- **C**: Use `const` for globals (automatically goes to Flash)
+- **C++**: Use `constinit const` for Flash-stored constants that need addresses
+- **C++**: Use `constexpr` for compile-time calculations that don't need storage
+- **Never** expect a `constexpr` variable to be in RAM - it violates the `const` semantics
 
 ---
 
-**Final Note**: C++'s object model is **far more complex** than C's. The same keyword can produce radically different machine code based on context. Always check the disassembly when memory placement matters.
+### **C vs C++ `const` Memory Behavior**
+
+**C Global `const`:**
+```c
+// C file scope
+const int c_const = 100;  // External linkage, goes to .rodata (Flash)
+```
+- **Why Flash?** `const` promises immutability; the compiler puts it in read-only memory
+- **RAM copy?** **Never** at the declaration site. It's always Flash.
+- **Note:** In C, you can accidentally create a RAM copy if you pass it to a function expecting non-const via a cast, but this is UB.
+
+**C++ Global `const`:**
+```cpp
+// C++ file scope
+const int cpp_const = 100;      // Internal linkage, may be optimized away
+constexpr int cpp_constexpr = 100;  // Internal linkage, may be optimized away
+constinit const int cpp_init = 100; // Internal linkage, guaranteed .rodata
+```
+- **Why internal linkage?** C++ makes `const` variables `static` by default
+- **RAM copy?** **Never** for the original variable. It's either optimized away or in `.rodata`
+- **Key difference:** In C++, you need `extern const` to get external linkage like C
+
+---
+
+**Final Note**: The critical error in the original was suggesting `constexpr` could create RAM copies. This is impossible because `constexpr` implies `const`, and `const` objects cannot be placed in writable `.data` sections. Always verify with disassembly when memory placement is critical.
