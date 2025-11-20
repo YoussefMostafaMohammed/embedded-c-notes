@@ -1,6 +1,5 @@
-# **Embedded C Mastery Series: From Silicon to Syntax**
+# **Embedded C Notes**
 
-## **Why This Repository Exists**
 
 This is not another syntax reference. This is a **deep, hardware-rooted exploration** of why Embedded C works the way it does—created from intensive Q&A sessions where every answer was driven by the question: **"What happens if this didn't exist?"**
 
