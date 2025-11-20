@@ -4,7 +4,9 @@
 1. **[Why C Dominates Embedded Systems](#1-why-c-dominates-embedded-systems)**
 2. **[Hardware Direct Access](#2-hardware-direct-access)**
 3. **[The Determinism Imperative](#3-the-determinism-imperative)**
+   - 3.1. [What is a PID Loop?](#3.1-what-is-a-pid-loop)
 4. **[Bit Manipulation Reality](#4-bit-manipulation-reality)**
+   - 4.1. [Atomic Instructions Explained](#4.1-atomic-instructions-explained)
 5. **[ANSI C Standardization](#5-ansi-c-standardization)**
 6. **[The Safety-Performance Tradeoff](#6-the-safety-performance-tradeoff)**
 
@@ -97,6 +99,17 @@ Quadcopter scenario:
 - Drone over-corrects → crashes
 ```
 
+#### **3.1. What is a PID Loop?**
+
+A **PID loop** is a control algorithm that continuously calculates an error value and applies a correction based on **Proportional, Integral, and Derivative** terms. It stands for **Proportional-Integral-Derivative controller**.
+
+**Why it's critical:**
+- **Proportional**: Reacts to current error (how far off you are now)
+- **Integral**: Accumulates past errors (fixes steady-state drift)
+- **Derivative**: Predicts future error (damps oscillations)
+
+In embedded systems, a Motor PID loop must run at strict intervals (e.g., every 100μs ±1μs) because any jitter in timing introduces phase lag, causing motor oscillation, overheating, or mechanical failure. The "±1μs" tolerance means the loop's execution time must be **deterministic**—the same input must always produce the same output in the exact same number of CPU cycles.
+
 ---
 
 ### **4. Bit Manipulation Reality**
@@ -129,6 +142,17 @@ reg |= (1 << 5);  // Read-modify-write
 // Atomic (SAFE)
 BSET reg, #5;     // Single instruction, can't be interrupted
 ```
+
+#### **4.1. Atomic Instructions Explained**
+
+An **atomic instruction** is a single CPU operation that completes in one indivisible cycle—it cannot be interrupted or split by ISRs (Interrupt Service Routines), multitasking, or multi-core access.
+
+**Why it matters in embedded systems:**
+- **Race condition prevention**: Without atomicity, an ISR can corrupt a read-modify-write sequence
+- **Hardware integrity**: Bit-setting operations on control registers must be guaranteed complete
+- **RTOS safety**: Atomic operations are the foundation of mutexes and semaphores
+
+On ARM Cortex-M, `BSET`, `BCLR`, and `BFI` are atomic single-cycle instructions. This means setting a UART enable bit with `BSET` is safe from interruption, while the C code `reg |= (1 << 5)` expands to three instructions (LDR-ORR-STR) and creates a 2-cycle vulnerability window where an ISR could fire, read the register, and overwrite your change.
 
 ---
 
@@ -164,4 +188,3 @@ __packed struct { }    // ARM Compiler: same thing
 | Type safety | Strong | Weak | `*(volatile uint32_t*)reg = value;` must be allowed |
 
 **The embedded engineer's responsibility:** You must manually enforce safety because **hardware cannot afford automatic checks**.
-

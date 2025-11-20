@@ -1,16 +1,19 @@
-
 # **Memory-Architecture**
 
 ### **Table of Contents**
 1. **[The Complete Memory Map](#1-the-complete-memory-map)**
 2. **[Flash vs RAM Characteristics](#2-flash-vs-ram-characteristics)**
 3. **[Text Segment (.text)](#3-text-segment-text)**
+   - 3.1. [What's Inside .text?](#31-whats-inside-text)
 4. **[Read-Only Data (.rodata)](#4-read-only-data-rodata)**
+   - 4.1. [Why 720 Bytes for 360 Entries?](#41-why-720-bytes-for-360-entries)
 5. **[Initialized Data (.data)](#5-initialized-data-data)**
+   - 5.1. [The 12-Byte Cost of Manual Init](#51-the-12-byte-cost-of-manual-init)
 6. **[Zero Section (.bss)](#6-zero-section-bss)**
 7. **[Stack Segment](#7-stack-segment)**
 8. **[Heap Segment](#8-heap-segment)**
 9. **[What If Not Scenarios](#9-what-if-not-scenarios)**
+   - 9.4. [What If No PSP? (Deep Dive)](#94-what-if-no-psp-deep-dive)
 
 ---
 
@@ -76,6 +79,28 @@
 
 **Why separate from data?** Harvard architecture CPUs have separate buses for code vs data. Placing `.text` in Flash allows **simultaneous fetch and data access**.
 
+#### **3.1. What's Inside .text?**
+
+The `.text` section contains pure machine code—your compiled functions. But it's more than just instructions:
+
+- **Function bodies**: Every compiled C function becomes binary opcodes
+- **Compiler-generated code**: Startup routines (`__main`), exception handlers
+- **Constant data disguised as code**: Small immediate values embedded directly in instructions (e.g., `MOV R0, #42` stores 42 inside the opcode itself)
+- **Literal pools**: Groups of constants (addresses, large numbers) embedded in the code stream for quick access via PC-relative loads
+
+**Example of literal pool:**
+```assembly
+08000100 <func>:
+ 08000100:   f04f 3342   mov.w   r3, #12850      ; Load immediate
+ 08000104:   f2ad 4298   sub.w   r2, sp, #4000   ; Large offset
+ 08000108:   4b01        ldr     r3, [pc, #4]    ; Load from literal pool
+0800010c:   4770        bx      lr
+0800010e:   bf00        nop
+08000110:   12345678    .word   0x12345678        ; Literal pool constant
+```
+
+The constant `0x12345678` is stored **inside .text** at address `0x08000110`, not in `.rodata`, because it's quicker to load via PC-relative addressing.
+
 ---
 
 ### **4. Read-Only Data (.rodata)**
@@ -104,6 +129,15 @@ int *sine_lookup = malloc(720);  // Runtime allocation
 // 1. Wastes RAM (720 bytes)
 // 2. Requires initialization code
 // 3. Non-deterministic (malloc may fail)
+```
+
+#### **4.1. Why 720 Bytes for 360 Entries?**
+
+You're right to question this! A standard `int` is 4 bytes, so 360 entries would be **1,440 bytes**. The example uses `int16_t` or `short` (2 bytes per entry), likely because the sine values fit within a 16-bit range (e.g., Q15 fixed-point format). This is a **conscious optimization**: using `int16_t` instead of `int` **saves 720 bytes of Flash** without losing precision for the application.
+
+**Corrected calculation:**
+```c
+const int16_t sine_lookup[360] = {0, 17, 35, ...};  // 360 × 2 = 720 bytes
 ```
 
 ---
@@ -142,6 +176,19 @@ void init(void) {
 }
 // For 1000 variables: 12,000 bytes of Flash wasted
 ```
+
+#### **5.1. The 12-Byte Cost of Manual Init**
+
+The line `global_init = 50;` generates three 32-bit (4-byte) instructions in Flash:
+
+```assembly
+LDR R0, =0x20000000  ; Load address of global_init (4 bytes)
+LDR R1, =50          ; Load immediate value 50 (4 bytes)
+STR R1, [R0]         ; Store value to RAM address (4 bytes)
+```
+
+**Total: 12 bytes per variable.**  
+With `.data`, the startup code uses a **single `memcpy` loop** (about 10 bytes total) to initialize all variables, regardless of count. For 1,000 variables, `.data` saves **11,990 bytes of Flash**.
 
 ---
 
@@ -303,3 +350,46 @@ void task(void) {
 // Result: Corrupts MSP (OS stack) → HardFault → System crash
 // No way to recover or kill just the task
 ```
+
+#### **9.4. What If No PSP? (Deep Dive)**
+
+**PSP (Process Stack Pointer)** is a second stack pointer in ARM Cortex-M that enables **task isolation** in RTOS environments.
+
+**Without PSP (single MSP only):**
+```
+Memory Layout with ONE stack:
+0x20010000:  MSP top (OS + all tasks share this)
+            ↓ Grows down
+            [Task1 variables]
+            [Task2 variables]  ← Overflow here corrupts OS
+            [OS kernel data]
+0x20000000:  MSP bottom
+
+When Task2 overflows: Corrupts OS heap → HardFault → Total system crash
+No way to identify which task failed
+```
+
+**With PSP (dual stacks):**
+```
+Memory Layout with PSP:
+0x20010000:  MSP top (OS kernel only, protected)
+            ↓ Grows down
+            [OS kernel data]
+0x20008000:  MSP limit (HW-checked)
+            ↑ Task area
+            [Task1 PSP stack] (separate SP)
+            [Task2 PSP stack] (separate SP)
+0x20000000:  RAM bottom
+
+When Task2 overflows: Corrupts Task2's own data
+OS can detect PSP fault → Kill ONLY Task2 → System keeps running
+```
+
+**Why PSP matters:**
+- **Fault isolation**: A buggy user task can't crash the OS
+- **Deterministic context switch**: `PendSV` uses PSP automatically
+- **Safety**: Enables watchdog per-task recovery
+
+**Real-world consequence:**
+> Without PSP, a memory leak in a low-priority sensor task will eventually crash the entire drone's flight controller. With PSP, the OS can restart just that task and log the error while the drone keeps flying.
+

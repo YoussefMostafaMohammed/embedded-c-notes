@@ -1,6 +1,5 @@
 # **Embedded C Notes**
 
-
 This is not another syntax reference. This is a **deep, hardware-rooted exploration** of why Embedded C works the way it does—created from intensive Q&A sessions where every answer was driven by the question: **"What happens if this didn't exist?"**
 
 Most Embedded C courses teach you *how* to write code. We teach you *why* the compiler generates specific instructions, *why* memory is partitioned into exact sections, and *why* violating certain rules causes physical system failures. Every concept here is traced to **CPU logic, compiler behavior, and hardware constraints**.

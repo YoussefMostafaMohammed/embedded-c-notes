@@ -1,10 +1,11 @@
-
 # **6-Pointers**
 
 ### **Table of Contents**
 1. **[Function Pointers Demystified](#1-function-pointers-demystified)**
 2. **[Reading Complex Declarations](#2-reading-complex-declarations)**
 3. **[Generic Pointer Types](#3-generic-pointer-types)**
+   - 3.1. [Void Pointers in Practice](#31-void-pointers-in-practice)
+   - 3.2. [Far vs Near Pointers: Legacy Concepts](#32-far-vs-near-pointers-legacy-concepts)
 4. **[Pointer Arithmetic in Embedded](#4-pointer-arithmetic-in-embedded)**
 
 ---
@@ -84,8 +85,8 @@ int (*(*(*func)(double))[5])(char*);
 | `void*`      | Generic pointer (can cast to any) | Cast, assignment, pass as argument |
 | `int*`       | Typed pointer | Dereference, arithmetic (`p++` adds sizeof(int)) |
 | `uintptr_t`  | Integer holding address | Bit manipulation, NOT dereferencing |
-| `far pointer`| 32-bit pointer to any segment | Legacy, x86 only |
-| `near pointer`| 16-bit pointer to same segment | Legacy, x86 only |
+| `far pointer`| 32-bit (segment:offset) | Legacy x86 only, obsolete in ARM |
+| `near pointer`| 16-bit offset only | Legacy x86 only, obsolete in ARM |
 
 **Void pointer usage:**
 ```c
@@ -102,6 +103,71 @@ my_memcpy(arr1, arr2, sizeof(arr1));
 ```
 
 **Why void* is essential:** Hardware drivers need to handle any data type (UART, SPI, DMA).
+
+#### **3.1. Void Pointers in Practice**
+
+**Hardware register configuration:**
+```c
+// Generic register writer
+void set_periph_reg(void *reg, uint32_t value) {
+    *(volatile uint32_t*)reg = value;
+}
+
+// Usage with any peripheral
+set_periph_reg(&RCC->CR, 0x01);      // Clock control
+set_periph_reg(&GPIOA->MODER, 0x55); // GPIO mode
+```
+
+**Rule:** Always cast `void*` to a typed pointer before dereferencing. The cast tells the compiler how many bytes to read/write.
+
+#### **3.2. Far vs Near Pointers: Legacy Concepts**
+
+**Historical context:** Far and near pointers only existed on **segmented architectures** (Intel 8086, x86 real mode). Modern ARM Cortex-M uses **flat addressing**—these concepts **do not apply** but appear in legacy code.
+
+**The 8086 memory problem:**
+- CPU had 16-bit registers (max 64KB address)
+- But memory was up to 1MB (20-bit address)
+- Solution: **Segmentation**
+
+**Near pointer (16-bit):**
+```c
+// 0x1234 only - offset within current 64KB segment
+char near *p = (char near*)0x1234;
+```
+- **Size**: 2 bytes
+- **Range**: 64KB only
+- **Speed**: Fast (no segment calculation)
+- **Use case**: Code/data in same segment
+
+**Far pointer (32-bit):**
+```c
+// 0x1234:5678 - segment:offset pair
+char far *p = (char far*)0x12340005;
+```
+- **Size**: 4 bytes (16-bit segment + 16-bit offset)
+- **Range**: 1MB total memory
+- **Speed**: Slow (5-10 cycles to compute physical address)
+- **Use case**: Access data in different segment
+
+**Physical address calculation:**
+```
+Physical = (Segment << 4) + Offset
+Example: 0x1234:0x5678 = (0x12340 + 0x5678) = 0x179B8
+```
+
+**In ARM Cortex-M (32-bit flat address space):**
+```c
+// ALL pointers are 32-bit, no segmentation
+uint32_t *p = (uint32_t*)0x20000000;  // Single flat address
+```
+- **No far/near distinction**: Every pointer accesses full 4GB space
+- **No segment registers**: Single address space for code/data
+- **Performance**: Uniform 1-2 cycle access time
+
+**Why you still see far/near in documentation:**
+- **Backward compatibility**: Some compilers retain keywords for porting old x86 code
+- **Misleading**: `#define far` as empty macro to make legacy code compile
+- **Modern practice**: **Ignore them completely** in ARM embedded development
 
 ---
 
